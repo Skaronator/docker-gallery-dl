@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+    - 'requirements.txt'
+
+env:
+  GHCR_SLUG: ghcr.io/skaronator/gallery-dl
+
+jobs:
+  gh-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Get gallery version
+      id: gallery
+      run: |
+        version=$(awk -F'==' '/gallery-dl/{print $2}' requirements.txt)
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Create release
+      uses: ncipollo/release-action@v1
+      with:
+        name: ${{ steps.gallery.outputs.version }}
+        commit: ${{ github.sha }}
+        tag: ${{ steps.gallery.outputs.version }}
+        body: |
+          This release is available via:
+          ```
+          docker pull ${{ env.GHCR_SLUG }}:${{ steps.gallery.outputs.version }}
+          ```
+
+          The full gallery-dl changelog is available here:
+          https://github.com/mikf/gallery-dl/releases/tag/v${{ steps.gallery.outputs.version }}
+
+    outputs:
+      version: ${{ steps.gallery.outputs.version }}
+
+  build-release:
+    runs-on: ubuntu-latest
+    needs: gh-release
+    permissions:
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Log into registry
+      uses: docker/login-action@v2.2.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v4.6.0
+      with:
+        images: ${{ env.GHCR_SLUG }}
+        tags: |
+          type=semver,pattern={{version}},value=${{ needs.gh-release.outputs.version }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ needs.gh-release.outputs.version }}
+        labels: |
+          org.opencontainers.image.title=gallery-dl
+          org.opencontainers.image.description=gallery-dl is a program to download image galleries and collections from several image hosting sites.
+          org.opencontainers.image.vendor=Skaronator
+
+
+    - name: Build and push Docker image
+      id: build-and-push
+      uses: docker/build-push-action@v4.1.1
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        provenance: false
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
