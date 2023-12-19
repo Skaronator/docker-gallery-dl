@@ -87,7 +87,6 @@ jobs:
           org.opencontainers.image.description=gallery-dl is a program to download image galleries and collections from several image hosting sites.
           org.opencontainers.image.vendor=Skaronator
 
-
     - name: Build and push Docker image
       id: build-and-push
       uses: docker/build-push-action@v5.1.0
