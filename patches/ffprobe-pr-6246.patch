@@ -1,0 +1,207 @@
+diff --git a/gallery_dl/downloader/http.py b/gallery_dl/downloader/http.py
+index 54750ac733..2ab721d0e8 100644
+--- a/gallery_dl/downloader/http.py
++++ b/gallery_dl/downloader/http.py
+@@ -12,7 +12,7 @@
+ import mimetypes
+ from requests.exceptions import RequestException, ConnectionError, Timeout
+ from .common import DownloaderBase
+-from .. import text, util
++from .. import text, util, ffprobe
+ from ssl import SSLError
+ 
+ 
+@@ -32,6 +32,8 @@ def __init__(self, job):
+         self.headers = self.config("headers")
+         self.minsize = self.config("filesize-min")
+         self.maxsize = self.config("filesize-max")
++        self.minlength = self.config("videolength-min")
++        self.maxlength = self.config("videolength-max")
+         self.retries = self.config("retries", extractor._retries)
+         self.retry_codes = self.config("retry-codes", extractor._retry_codes)
+         self.timeout = self.config("timeout", extractor._timeout)
+@@ -59,6 +61,20 @@ def __init__(self, job):
+                 self.log.warning(
+                     "Invalid maximum file size (%r)", self.maxsize)
+             self.maxsize = maxsize
++        if self.minlength:
++            minlength = text.parse_duration(self.minlength)
++            if not minlength:
++                self.log.warning(
++                    "Invalid maximum videolength duration (%r)",
++                    self.minlength)
++            self.minlength = minlength
++        if self.maxlength:
++            maxlength = text.parse_duration(self.maxlength)
++            if not maxlength:
++                self.log.warning(
++                    "Invalid maximum videolength duration (%r)",
++                    self.maxlength)
++            self.maxlength = maxlength
+         if isinstance(self.chunk_size, str):
+             chunk_size = text.parse_bytes(self.chunk_size)
+             if not chunk_size:
+@@ -219,6 +235,28 @@ def _download_impl(self, url, pathfmt):
+                 kwdict[metadata] = util.extract_headers(response)
+                 build_path = True
+ 
++            # check video length using ffprobe request
++            if (self.minlength or self.maxlength):
++                length = ffprobe.get_video_length(self, url)
++
++                if length and self.minlength and length < self.minlength:
++                    self.release_conn(response)
++                    self.log.warning(
++                        "Video length is shorter than allowed minimum "
++                        "(%s < %s)",
++                        length, self.minlength)
++                    pathfmt.temppath = ""
++                    return True
++
++                if length and self.maxlength and length > self.maxlength:
++                    self.release_conn(response)
++                    self.log.warning(
++                        "Video length is longer than allowed maximum "
++                        "(%s > %s)",
++                        length, self.maxlength)
++                    pathfmt.temppath = ""
++                    return True
++
+             # build and check file path
+             if build_path:
+                 pathfmt.build_path()
+diff --git a/gallery_dl/ffprobe.py b/gallery_dl/ffprobe.py
+new file mode 100644
+index 0000000000..9674cb8f85
+--- /dev/null
++++ b/gallery_dl/ffprobe.py
+@@ -0,0 +1,96 @@
++# -*- coding: utf-8 -*-
++
++# Copyright 2014-2019 Mike Fährmann
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License version 2 as
++# published by the Free Software Foundation.
++
++"""Fetch Video Length before actually downloading a whole file"""
++
++import subprocess
++import json
++import time
++from datetime import timedelta
++from . import util
++
++
++def get_video_length(obj, url):
++    minimum_frames = 10
++    data = None
++    tries = 0
++    msg = ""
++
++    ffprobe = util.expand_path(obj.config("ffprobe-location", "ffprobe"))
++
++    command = [
++        ffprobe,
++        "-v",
++        "quiet",
++        "-print_format",
++        "json",
++        "-show_format",
++        "-show_streams",
++    ]
++
++    if obj.headers:
++        for key, value in obj.headers.items():
++            command.extend(["-headers", key + ": " + value])
++
++    command.append(url)
++
++    while True:
++        if tries:
++            obj.log.warning("%s (%s/%s)", msg, tries, obj.retries+1)
++            if tries > obj.retries:
++                return False
++            time.sleep(tries)
++        tries += 1
++
++        try:
++            result = subprocess.run(
++                command,
++                stdout=subprocess.PIPE,
++                stderr=subprocess.PIPE,
++                text=True,
++                check=True,
++            )
++            data = json.loads(result.stdout)
++        except subprocess.CalledProcessError as e:
++            msg = "ffprobe failed: " + e
++            print(e)
++            continue
++        except json.JSONDecodeError:
++            msg = "Failed to decode ffprobe output as JSON"
++            continue
++
++        # A file typically contains multiple streams (video, audio, subtitle).
++        # Here we filter out everything that is not considered a video
++        video_streams = [
++            float(stream["duration"])
++            for stream in data["streams"]
++            if stream["codec_type"] == "video" and
++            "duration" in stream and
++            "avg_frame_rate" in stream and
++            frame_count(stream) >= minimum_frames
++        ]
++
++        if not video_streams:
++            obj.log.info(
++                "No video streams found or none with a valid duration "
++                "and minimum frames."
++            )
++            return None
++
++        duration = timedelta(seconds=min(video_streams))
++        return duration
++
++
++def frame_count(stream):
++    """Calculates the number of frames in the video stream."""
++    try:
++        duration = float(stream["duration"])
++        avg_frame_rate = eval(stream["avg_frame_rate"])
++        return int(duration * avg_frame_rate)
++    except (ValueError, ZeroDivisionError):
++        return 0
+diff --git a/gallery_dl/text.py b/gallery_dl/text.py
+index 8517cdf5dd..de8f872cae 100644
+--- a/gallery_dl/text.py
++++ b/gallery_dl/text.py
+@@ -268,6 +268,28 @@ def parse_timestamp(ts, default=None):
+             return default
+ 
+ 
++def parse_duration(duration_string, default=None):
++    try:
++        patterns = {
++            'hours': r'(\d+)\s*h(our(s)?)?',
++            'minutes': r'(\d+)\s*m(in(ute)?(s)?)?',
++            'seconds': r'(\d+)\s*s(ec(ond)?(s)?)?'
++        }
++        parsed_values = {unit: 0 for unit in patterns.keys()}
++
++        for unit, pattern in patterns.items():
++            match = re.search(pattern, duration_string, re.IGNORECASE)
++            if match:
++                parsed_values[unit] = int(match.group(1))
++
++        return datetime.timedelta(
++            hours=parsed_values['hours'],
++            minutes=parsed_values['minutes'],
++            seconds=parsed_values['seconds'])
++    except Exception:
++        return default
++
++
+ def parse_datetime(date_string, format="%Y-%m-%dT%H:%M:%S%z", utcoffset=0):
+     """Create a datetime object by parsing 'date_string'"""
+     try:
