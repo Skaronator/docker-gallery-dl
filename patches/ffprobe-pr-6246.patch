@@ -72,10 +72,10 @@ index 54750ac733..2ab721d0e8 100644
                  pathfmt.build_path()
 diff --git a/gallery_dl/ffprobe.py b/gallery_dl/ffprobe.py
 new file mode 100644
-index 0000000000..9674cb8f85
+index 0000000000..707f5786fb
 --- /dev/null
 +++ b/gallery_dl/ffprobe.py
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,95 @@
 +# -*- coding: utf-8 -*-
 +
 +# Copyright 2014-2019 Mike Fährmann
@@ -135,8 +135,7 @@ index 0000000000..9674cb8f85
 +            )
 +            data = json.loads(result.stdout)
 +        except subprocess.CalledProcessError as e:
-+            msg = "ffprobe failed: " + e
-+            print(e)
++            msg = "ffprobe failed: " + str(e)
 +            continue
 +        except json.JSONDecodeError:
 +            msg = "Failed to decode ffprobe output as JSON"
@@ -173,10 +172,10 @@ index 0000000000..9674cb8f85
 +    except (ValueError, ZeroDivisionError):
 +        return 0
 diff --git a/gallery_dl/text.py b/gallery_dl/text.py
-index 8517cdf5dd..de8f872cae 100644
+index 5fd5a40715..bb6653d587 100644
 --- a/gallery_dl/text.py
 +++ b/gallery_dl/text.py
-@@ -268,6 +268,28 @@ def parse_timestamp(ts, default=None):
+@@ -305,6 +305,28 @@ def parse_timestamp(ts, default=None):
              return default
  
  
