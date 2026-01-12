@@ -1,5 +1,5 @@
 diff --git a/gallery_dl/downloader/http.py b/gallery_dl/downloader/http.py
-index 4f380fb44..9800c8a67 100644
+index 4f380fb44..353c5a9c4 100644
 --- a/gallery_dl/downloader/http.py
 +++ b/gallery_dl/downloader/http.py
 @@ -12,7 +12,7 @@
@@ -20,7 +20,15 @@ index 4f380fb44..9800c8a67 100644
          self.retries = self.config("retries", extractor._retries)
          self.retry_codes = self.config("retry-codes", extractor._retry_codes)
          self.timeout = self.config("timeout", extractor._timeout)
-@@ -62,6 +64,20 @@ def __init__(self, job):
+@@ -41,6 +43,7 @@ def __init__(self, job):
+         self.mtime = self.config("mtime", True)
+         self.rate = self.config("rate")
+         interval_429 = self.config("sleep-429")
++        self._ffprobe_cache = {}
+ 
+         if not self.config("consume-content", False):
+             # this resets the underlying TCP connection, and therefore
+@@ -62,6 +65,20 @@ def __init__(self, job):
                  self.log.warning(
                      "Invalid maximum file size (%r)", self.maxsize)
              self.maxsize = maxsize
@@ -41,13 +49,20 @@ index 4f380fb44..9800c8a67 100644
          if isinstance(self.chunk_size, str):
              chunk_size = text.parse_bytes(self.chunk_size)
              if not chunk_size:
-@@ -261,6 +277,28 @@ def _download_impl(self, url, pathfmt):
+@@ -261,6 +278,35 @@ def _download_impl(self, url, pathfmt):
                  kwdict[metadata] = util.extract_headers(response)
                  build_path = True
  
 +            # check video length using ffprobe request
-+            if (self.minlength or self.maxlength):
-+                length = ffprobe.get_video_length(self, url)
++            if self.minlength or self.maxlength:
++                sentinel = object()
++                length = self._ffprobe_cache.get(url, sentinel)
++                if length is sentinel:
++                    length = ffprobe.get_video_length(self, url)
++                    if length is not False:
++                        # cache successful ffprobe results per URL to avoid
++                        # re-running the probe when retries occur later
++                        self._ffprobe_cache[url] = length
 +
 +                if length and self.minlength and length < self.minlength:
 +                    self.release_conn(response)
