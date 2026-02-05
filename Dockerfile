@@ -1,4 +1,4 @@
-FROM python:3.14.2-slim-bookworm
+FROM python:3.14.3-slim-bookworm
 
 COPY requirements.txt requirements.txt
 
