@@ -1,5 +1,8 @@
 # gallery-dl Docker Container Image
 
+> [!IMPORTANT]
+> **No longer maintained:** This repository and its container images are no longer maintained. Newer images are available at [tuxcrate.com/containers/gallery-dl](https://tuxcrate.com/containers/gallery-dl).
+
 Command-line program to download image galleries and collections from several image hosting sites.
 
 [https://github.com/mikf/gallery-dl](https://github.com/mikf/gallery-dl)
